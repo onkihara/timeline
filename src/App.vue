@@ -9,8 +9,13 @@ import Timeline from './components/Timeline.vue'
 
     <Timeline
       height="50vh"
-      :start="new Date('2022-12-28')"
+      :start-at-day="new Date('2022-12-28T00:00:00+0100')"
+      :start-at-monday="true"
+      :full-week="true"
     >
+      <template #week>
+        <span>Woche</span>
+      </template>
 
     </Timeline>
 

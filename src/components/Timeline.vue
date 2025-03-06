@@ -1,122 +1,225 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <script setup>
 
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onBeforeMount, onMounted, watch } from 'vue'
+import { items } from "../Data.js"
+import TimelineItems from "./TimelineItems.vue"
 
 const props = defineProps({
-
   // props-style
   height: { type: String, default: '100%' },
   width : { type: String, default: '100%' },
-
   // props-data
-  zoom : { type: Number, default: 10 },
+  days : { type: Number, default: 5 },
   // Unix-UTC-Timestamp (!)
-  start : { type: Object, default: Date.now() },
-
-  // props-default
-  minZoom : { type: Number, default: 1 },
-  maxZoom : { type: Number, default: 28 },
+  startAtDay : { type: Object, default() { return new Date }},
+  startAtMonday : { type : Boolean, default: false },
+  // day-default
+  fullWeek : { type: Boolean, default: false },
+  // hour-default
+  startAtHour : { type: Number, default: 8 },
+  hours : { type: Number, default: 10 },
+  // locale options
   locale : { type: String, default: "de-DE" },
-  fullWeek : { type: Boolean, default: true },
-
-  // short, long or numeric
-  dayFormat : { type: String, default: 'long' },
-  monthFormat : { type: String, default: 'long' },
-
+  intl : { type: Object, default() { return {  }}},
+  // date: short, long or numeric, time: numeric, 2-digit
+  dateOptions : { type: Object, default() {return {weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }}},
+  timeOptions : { type: Object, default() { return { hour: '2-digit', minute: '2-digit'}}}
 })
 
+// period category
 const period = ref('days')
+// start date of period
+const start = ref(props.startAtDay)
+// end date of period
+const end = ref(null)
+
 
 const data = reactive({
+  days: props.days,
+  hours: props.hours,
+  sectors: [],
+  items : []
+})
 
-  zoom: props.zoom,
-  start: props.start,
+const dimensions = reactive({
+  timelineWidth : 0,
+  sectorWidth : 0,
+  firstWidth : 0
+})
 
 
+onBeforeMount(() => {
+  data.days = props.fullWeek ? 7 : props.days
+  data.hours = props.hours
+  data.items = getData()
+  calcDays()
 })
 
 
 onMounted(() => {
-  //console.log(props.start, data.start.toISOString())
+  new ResizeObserver(calcSectorDimensions)
+    .observe(document.querySelector('.v-timeline'))
+  calcSectorDimensions()
 })
 
 
-const sectors = computed(() => {
+const startDate = computed({
+  get() {
+    return start.value.toISOString().split('T')[0]
+  },
+  set(value) {
+    start.value = new Date(value)
+  }
+})
+
+
+watch(start, (newStart) => {
+  start.value = newStart
+  calcHeader()
+  if (period.value === 'days') {
+    calcDays()
+  }
   if (period.value === 'hours') {
-    return Math.floor(data.zoom*2)
+    calcHours()
   }
-
-  // days-Sectors
-  return calcDays()
 })
 
 
-function zoomHandler(event) {
-  if(event.deltaY < 0) {
-    if (data.zoom == props.minZoom) {
-      return
-    }
-    data.zoom -= 1
-  } else {
-    if (data.zoom == props.maxZoom) {
-      return
-    }
-    data.zoom += 1
+function calcSectorDimensions() {
+  const cont = document.querySelector('.v-timeline-container')
+  dimensions.timelineWidth = cont?.clientWidth
+  if (dimensions.timelineWidth) {
+    dimensions.sectorWidth = Math.floor(dimensions.timelineWidth / (data.sectors.length + 1))
+    dimensions.firstWidth = dimensions.timelineWidth - dimensions.sectorWidth * data.sectors.length
   }
-  if (data.zoom <= 4) {
-    period.value = 'hours'
-  } else {
-    period.value = 'days'
+}
+
+
+function hoursOfDay(timedata) {
+  start.value = new Date(timedata.date)
+  period.value = 'hours'
+  calcHours()
+}
+
+
+function daysOfWeek() {
+  period.value = 'days'
+  calcDays()
+}
+
+
+function setEndOfPeriod() {
+  const date = new Date(data.sectors[data.sectors.length-1].date)
+  date.setDate(date.getDate()+1)
+  date.setSeconds(date.getSeconds()-1)
+  end.value = date
+}
+
+
+function next() {
+  if (period.value === 'days') {
+    start.value.setDate(start.value.getDate() + data.days)
+    calcDays()
   }
+  if (period.value === 'hours') {
+    start.value.setDate(start.value.getDate() + 1)
+    calcHours()
+  }
+  startDate.value = start.value
+}
+
+
+function previous() {
+  if (period.value === 'days') {
+    start.value.setDate(start.value.getDate() - data.days)
+    calcDays()
+  }
+  if (period.value === 'hours') {
+    start.value.setDate(start.value.getDate() - 1)
+    calcHours()
+  }
+  startDate.value = start.value
+}
+
+function calcHours() {
+  let day = start.value
+  let offset = props.startAtHour
+
+  const hours = []
+  for (let i = 0; i < data.hours; i++) {
+    day.setHours(offset + i)
+    hours.push({
+      hour : day.getHours(),
+      time : day.toLocaleTimeString(props.locale, props.timeOptions),
+      isodate : day.toISOString().split('T')[0],
+      date : new Date(start.value.setHours(day.getHours()))
+    })
+  }
+  data.sectors = hours
+  setEndOfPeriod()
 }
 
 
 function calcDays() {
-  // week starts on Monday?
-  let start;
-  if (props.fullWeek) {
-    start = getMonday(data.start)
-  } else {
-    start = data.start
+  // full week?
+  let first = start.value
+  if (props.startAtMonday) {
+    first = getMonday(first)
   }
   // calc days of period
   const days = []
-  for (let i = 0; i < data.zoom/2; i++) {
-    const date = new Date(start)
+  for (let i = 0; i < data.days; i++) {
+    const date = new Date(first)
     date.setDate(date.getDate() + i)
     days.push({
-      weekday : date.toLocaleDateString(props.locale, { weekday: props.dayFormat}),
+      weekday : date.toLocaleDateString(props.locale, { weekday: props.dateOptions.weekday}),
       day : date.getDate(),
-      month : date.toLocaleDateString(props.locale,{ month: props.monthFormat }),
+      month : date.toLocaleDateString(props.locale,{ month: props.dateOptions.month }),
       year : date.getFullYear(),
+      date : date
     })
   }
-  return days
+  data.sectors = days
+  setEndOfPeriod()
 }
 
 
-function calcMonth() {
-  // get month of start
-  const first = sectors.value.at(0).month
-  const firstYear = sectors.value.at(0).year
-  // get month of end
-  const last = sectors.value.at(-1).month
-  const lastYear = sectors.value.at(-1).year
-  // compare and combine if not eqal
-  if (firstYear == lastYear) {
-    return first === last ? first + ' ' + firstYear : first + ' - ' + last + ' ' + firstYear
-  } else {
-    return first + ' ' + firstYear + ' - ' + last + ' ' + lastYear
+function calcHeader() {
+  calcSectorDimensions()
+  // days header
+  if (period.value === 'days') {
+    // get month of start
+    const first = data.sectors.at(0).month
+    const firstYear = data.sectors.at(0).year
+    // get month of end
+    const last = data.sectors.at(-1).month
+    const lastYear = data.sectors.at(-1).year
+    // compare and combine if not eqal
+    if (firstYear == lastYear) {
+      return first === last ? first + ' ' + firstYear : first + ' - ' + last + ' ' + firstYear
+    } else {
+      return first + ' ' + firstYear + ' - ' + last + ' ' + lastYear
+    }
   }
+  // hours header
+  if (period.value === 'hours') {
+    return start.value.toLocaleDateString(props.locale, props.dateOptions)
+  }
+
 }
+
 
 
 function getMonday(d) {
-  d = new Date(d)
-  var day = d.getDay(),
-    diff = d.getDate() - day + (day == 0 ? -6 : 1);
-  return new Date(d.setDate(diff));
+  let day = d.getDay()
+  let diff = d.getDate() - day + (day == 0 ? -6 : 1);
+  const date = new Date(d.setDate(diff))
+  return date;
+}
+
+function getData() {
+  return items // meanwhile -> todo: fetch json-data
 }
 
 
@@ -129,35 +232,89 @@ function getMonday(d) {
 <template>
   <div class="v-timeline"
     :style="{ height: props.height, width: props.width }"
-    v-on:wheel="zoomHandler">
+  >
 
-    <div
-      class="v-timeline-month-year-header">
+    <div class="v-timeline-month-year-header">
 
+      <a href="" v-on:click.prevent="previous">
+        <slot name="previous">Previous</slot>
+      </a>
       <div class="v-timeline-month-year">
-        {{ calcMonth() }}
-        <input type="date" v-value="data.start.toISOString().split('T')[0]" v-on:input="data.start = new Date($event.target.value)">
+        {{ calcHeader() }}
+        <input
+          type="date"
+          v-model="startDate"
+        >
+        <span v-if="period === 'hours'">
+          <a href="" v-on:click.prevent="daysOfWeek">
+            <slot name="week">Week</slot>
+          </a>
+        </span>
       </div>
+      <a href="" v-on:click.prevent="next">
+        <slot name="next">Next</slot>
+      </a>
     </div>
 
     <div
-      class="v-timeline-container v-timeline-container-header">
+      class="v-timeline-container v-timeline-container-header"
+      ref="timeline-container"
+    >
+
+      <div
+        class="v-timeline-item v-timeline-header"
+        :style="{ width : dimensions.firstWidth+'px' }"
+      ></div>
 
       <div class="v-timeline-item v-timeline-header"
-        v-for="(ts, i) in sectors"
-        :key="i">
-        <span class="v-timeline-weekday">{{ ts.weekday }}</span>
-        <span class="v-timeline-day">{{ ts.day }}</span>
+        :style="{ width : dimensions.sectorWidth+'px' }"
+        :data-date="ts.date"
+        :data-sector="i"
+        v-for="(ts, i) in data.sectors"
+        :key="i"
+      >
+        <a class="v-timeline-header-content" v-if="period === 'days'" href="" v-on:click.prevent="hoursOfDay(ts)">
+          <span class="v-timeline-day">{{ ts.weekday }}<br />{{ ts.day }}</span>
+        </a>
+        <div class="v-timeline-header-content" v-if="period === 'hours'">
+          <span class="v-timeline-hour">{{ ts.time }}</span>
+        </div>
       </div>
     </div>
 
     <div
-      class="v-timeline-container v-timeline-container-sector">
+      class="v-timeline-container v-timeline-container-sector"
+      v-for="(item, k) in data.items"
+      :key="k"
+    >
+
+      <div
+        class="v-timeline-item v-timeline-group"
+        :style="{ width : dimensions.firstWidth+'px' }"
+      >
+        {{ item.group }}
+      </div>
 
       <div class="v-timeline-item v-timeline-sector"
-        v-for="(ts, i) in sectors"
-        :key="i">
+      :style="{ width : dimensions.sectorWidth+'px' }"
+        :data-date="ts.date"
+        :data-sector="i"
+        v-for="(ts, i) in data.sectors"
+        :key="i"
+      >
+      &nbsp;
       </div>
+
+      <TimelineItems
+        :dates="item.dates"
+        :start="start"
+        :end="end"
+        :period="period"
+        :dimensions="dimensions"
+        :sectors="data.sectors"
+        :hours="{ start : props.startAtHour, number : props.hours }"
+      />
+
     </div>
 
   </div>
@@ -169,15 +326,14 @@ function getMonday(d) {
 <style scoped>
 
   .v-timeline {
-    display: flex;
-    flex-direction: column;
 
     .v-timeline-month-year-header {
+      display:flex;
+      justify-content: space-between;
       text-align:center;
       padding:10px;
       background-color:beige;
-      border: 1px solid black;
-      border-bottom: none;
+      border-top: 1px solid #FFF;
 
       .v-timeline-month-year {
         input {
@@ -189,13 +345,15 @@ function getMonday(d) {
     }
 
     .v-timeline-container {
-      display:flex;
-      flex-direction: row;
+
+      &.v-timeline-container-header {
+        height:70px;
+      }
 
       .v-timeline-item {
-        border-left: 1px solid black;
-        flex: 1;
-        min-width:0;
+        display: block;
+        float:left;
+        box-sizing: border-box;
 
         &:nth-child(odd) {
           background-color: antiquewhite;
@@ -205,26 +363,43 @@ function getMonday(d) {
           background-color: aliceblue;
         }
 
-        &:last-child {
-          border-right: 1px solid black;
-        }
       }
 
       .v-timeline-header {
+        height: 100%;
         text-align:center;
-        padding:10px;
-        border-bottom:1px solid black;
-        border-top: 1px solid black;
+        border-bottom:1px solid #FFF;
+        border-top: 1px solid #FFF;
 
-        .v-timeline-weekday, .v-timeline-day {
-          display:block;
+        .v-timeline-header-content {
+          height:100%;
+          width:100%;
+          display:flex;
+          justify-content: center;
+          align-items: center;
         }
+
       }
     }
 
     .v-timeline-container-sector {
-      height: 100vh;
+
+      position: relative;
+      height: 50px;
+
+      .v-timeline-item {
+        height: 50px;
+        border-bottom: 1px solid #FFF;
+      }
+
+      .v-timeline-group {
+        display:flex;
+        align-items: center;
+        padding-left:10px;
+      }
     }
+
+
   }
 
 </style>
